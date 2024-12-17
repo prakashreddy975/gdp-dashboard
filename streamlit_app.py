@@ -3,8 +3,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # Define the file to store the budget data
-DATA_FILE = 'daily_budget_data.csv'
-SALARY_FILE = 'salary_data.csv'  # Separate file for salary records
+DATA_FILE = 'data/daily_budget_data.csv'
+SALARY_FILE = 'data/salary_data.csv'  # Separate file for salary records
 
 # Fixed budget values for each category
 CATEGORY_BUDGET = {
