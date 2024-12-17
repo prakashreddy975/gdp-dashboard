@@ -1,151 +1,208 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+from datetime import datetime, timedelta
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Define the file to store the budget data
+DATA_FILE = 'daily_budget_data.csv'
+SALARY_FILE = 'salary_data.csv'  # Separate file for salary records
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Fixed budget values for each category
+CATEGORY_BUDGET = {
+    'House Rent': 430,
+    'Shopping': 100,
+    'Groceries': 50,
+    'Food': 50,
+    'Transport': 20,
+    'Entertainment': 100
+}
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Fixed monthly income (initially)
+MONTHLY_INCOME = 800
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Load existing data if available
+def load_data(file=DATA_FILE):
+    try:
+        return pd.read_csv(file)
+    except FileNotFoundError:
+        return pd.DataFrame(columns=['Date', 'Category', 'Amount Spent', 'Budgeted Amount'])
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# Load salary data, ensure 'Pay Date' column exists
+def load_salary_data(file=SALARY_FILE):
+    try:
+        df = pd.read_csv(file)
+        # Ensure 'Pay Date' column exists
+        if 'Pay Date' not in df.columns:
+            df['Pay Date'] = pd.to_datetime(df['End Date'])  # Create a 'Pay Date' if missing
+        return df
+    except FileNotFoundError:
+        return pd.DataFrame(columns=['Start Date', 'End Date', 'Salary', 'Pay Date'])
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Save data to CSV file
+def save_data(df, file=DATA_FILE):
+    df.to_csv(file, index=False)
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+# Save salary data
+def save_salary_data(df, file=SALARY_FILE):
+    df.to_csv(file, index=False)
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+# Add an entry to the data
+def add_entry(date, category, spent, budgeted):
+    df = load_data()
+    entry = pd.DataFrame([[date, category, spent, budgeted]], columns=df.columns)
+    df = pd.concat([df, entry], ignore_index=True)
+    save_data(df)
 
-    return gdp_df
+# Add salary entry with pay date
+def add_salary(start_date, end_date, salary, pay_date):
+    df = load_salary_data()
+    entry = pd.DataFrame([[start_date, end_date, salary, pay_date]], columns=['Start Date', 'End Date', 'Salary', 'Pay Date'])
+    df = pd.concat([df, entry], ignore_index=True)
+    save_salary_data(df)
 
-gdp_df = get_gdp_data()
+# Delete a selected entry (daily or salary)
+def delete_confirmation(index, is_salary=False):
+    if is_salary:
+        salary_df = load_salary_data()
+        salary_df = salary_df.drop(index).reset_index(drop=True)
+        save_salary_data(salary_df)
+        st.success("Salary entry deleted successfully!")
+    else:
+        df = load_data()
+        df = df.drop(index).reset_index(drop=True)
+        save_data(df)
+        st.success("Entry deleted successfully!")
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+# Get the total salary for the month
+def get_total_salary_for_month(month):
+    salary_data = load_salary_data()
+    salary_data['Start Date'] = pd.to_datetime(salary_data['Start Date'])
+    salary_data['End Date'] = pd.to_datetime(salary_data['End Date'])
+    
+    monthly_salary_data = salary_data[salary_data['Start Date'].dt.strftime('%Y-%m') == month]
+    return monthly_salary_data['Salary'].sum()
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+# Convert Pay Date to datetime, handling errors and specifying a format
+def convert_to_datetime(df, column_name):
+    # Try to convert to datetime with error handling and mixed format
+    df[column_name] = pd.to_datetime(df[column_name], errors='coerce', format=None)  # Let pandas auto-format
+    return df
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+# Set the page title
+st.title('Daily Budget Tracker')
 
-# Add some spacing
-''
-''
+# Load data
+df = load_data()
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+# Sidebar - Input Form for Daily Expenses
+st.sidebar.header('Enter Daily Budget Data')
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
+# Date picker for selecting the date
+date = st.sidebar.date_input('Select Date', datetime.today())
 
-countries = gdp_df['Country Code'].unique()
+# Category, amount spent, and budgeted
+categories = list(CATEGORY_BUDGET.keys())
+category = st.sidebar.selectbox('Select Category', categories)
+spent = st.sidebar.number_input('Amount Spent', min_value=0, step=1)
+budgeted = CATEGORY_BUDGET[category]  # Use fixed budget for the category
 
-if not len(countries):
-    st.warning("Select at least one country")
+# Button to add an entry for daily spending
+if st.sidebar.button('Add Entry'):
+    date_str = date.strftime('%Y-%m-%d')  # Convert date to string in 'YYYY-MM-DD' format
+    add_entry(date_str, category, spent, budgeted)
+    st.sidebar.success(f'Entry for {category} on {date_str} added successfully!')
 
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
+# Sidebar - Input Form for Salary Data
+st.sidebar.header('Enter Bi-Weekly Salary Information')
 
-''
-''
-''
+# Date input for start and end date of salary period
+start_date = st.sidebar.date_input('Salary Start Date')
+end_date = st.sidebar.date_input('Salary End Date')
 
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
+# Salary input
+salary = st.sidebar.number_input('Salary Credit for this period', min_value=0, step=1)
 
-st.header('GDP over time', divider='gray')
+# Pay date input (this is the date when the salary is credited)
+pay_date = st.sidebar.date_input('Pay Date')
 
-''
+# Button to add a salary entry
+if st.sidebar.button('Add Salary'):
+    add_salary(start_date, end_date, salary, pay_date)
+    st.sidebar.success(f'Salary for {start_date} to {end_date} added successfully with Pay Date {pay_date}!')
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
+# Get all available months from both daily data and salary data
+daily_months = sorted(df['Date'].str[:7].unique())  # Get unique months from daily budget
+salary_data = load_salary_data()
 
-''
-''
+# Ensure salary 'Pay Date' is converted to datetime
+salary_data = convert_to_datetime(salary_data, 'Pay Date')
 
+# Remove rows with invalid 'Pay Date' (NaT) after conversion
+salary_data = salary_data[~salary_data['Pay Date'].isna()]
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+# Get unique months from salary data
+salary_months = sorted(salary_data['Pay Date'].dt.strftime('%Y-%m').unique())
 
-st.header(f'GDP in {to_year}', divider='gray')
+# Combine and deduplicate months from both datasets
+available_months = sorted(set(daily_months + salary_months))
 
-''
+# Month filter for overview
+st.sidebar.subheader("Select Month for Overview")
+month_filter = st.sidebar.selectbox("Select Month", available_months, index=len(available_months) - 1)
 
-cols = st.columns(4)
+# Display daily entries
+st.header('Daily Expense Tracker')
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+# Show daily data for the selected month
+selected_month_data = df[df['Date'].str.startswith(month_filter)]
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
+if not selected_month_data.empty:
+    st.write(selected_month_data)
 
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+    # Option to delete an entry
+    delete_index = st.selectbox('Select an entry to delete', selected_month_data.index.tolist(), key="delete")
+    if st.button('Delete Selected Entry'):
+        delete_confirmation(delete_index)
+else:
+    st.write(f"No data available for {month_filter} yet.")
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# Monthly budget overview for selected month
+st.subheader(f'Monthly Overview for {month_filter}')
+monthly_data = selected_month_data
+
+# Calculate totals for each category in the selected month
+if not monthly_data.empty:
+    total_spent_by_category = monthly_data.groupby('Category')['Amount Spent'].sum()
+    total_spent = total_spent_by_category.sum()
+    total_budgeted = monthly_data.groupby('Category')['Budgeted Amount'].sum().sum()
+    remaining_budget = MONTHLY_INCOME - total_spent
+    remaining_savings = MONTHLY_INCOME - total_spent
+
+    # Display total spent, budget, and remaining savings
+    st.write(f"Total Amount Spent: ${total_spent}")
+    st.write(f"Total Budgeted Amount: ${total_budgeted}")
+    st.write(f"Remaining Budget: ${remaining_budget}")
+    st.write(f"Remaining Savings: ${remaining_savings}")
+
+    # Optional: Bar chart for spending distribution in the selected month
+    st.bar_chart(total_spent_by_category)
+
+# Get total salary for the selected month and add it to the monthly income
+total_salary_for_month = get_total_salary_for_month(month_filter)
+total_monthly_income = MONTHLY_INCOME + total_salary_for_month
+
+st.subheader(f'Total Salary for {month_filter}: ${total_salary_for_month}')
+st.write(f"Total Monthly Income (Including Salary): ${total_monthly_income}")
+
+# Show salary data for the selected month
+st.subheader(f'Salary Data for {month_filter}')
+salary_for_month = salary_data[salary_data['Pay Date'].dt.strftime('%Y-%m') == month_filter]
+
+if not salary_for_month.empty:
+    st.write(salary_for_month)
+
+    # Option to delete a salary entry
+    delete_salary_index = st.selectbox('Select a salary entry to delete', salary_for_month.index.tolist(), key="delete_salary")
+    if st.button('Delete Selected Salary Entry'):
+        delete_confirmation(delete_salary_index, is_salary=True)
+else:
+    st.write(f"No salary data available for {month_filter}.")
